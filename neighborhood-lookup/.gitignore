@@ -1,0 +1,9 @@
+# Downloaded neighborhood boundary data (re-fetchable from OSM)
+neighborhood_lookup/data/*.geojson
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
