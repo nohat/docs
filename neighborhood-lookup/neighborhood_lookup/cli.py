@@ -10,9 +10,12 @@ DATA_DIR = Path(__file__).parent / "data"
 
 def cmd_fetch(args):
     """Handle the 'fetch' subcommand."""
-    from neighborhood_lookup.fetch import fetch_bbox, fetch_city
+    from neighborhood_lookup.fetch import fetch_area, fetch_bbox, fetch_city
 
-    if args.bbox:
+    if args.area_id:
+        name = args.name or f"area_{args.area_id}"
+        path = fetch_area(args.area_id, name)
+    elif args.bbox:
         parts = [float(x.strip()) for x in args.bbox.split(",")]
         if len(parts) != 4:
             print("Error: --bbox requires exactly 4 values: south,west,north,east", file=sys.stderr)
@@ -22,7 +25,7 @@ def cmd_fetch(args):
         path = fetch_bbox(south, west, north, east, name)
     else:
         if not args.city:
-            print("Error: provide --city or --bbox", file=sys.stderr)
+            print("Error: provide --city, --bbox, or --area-id", file=sys.stderr)
             sys.exit(1)
         path = fetch_city(args.city)
 
@@ -55,6 +58,8 @@ def cmd_lookup(args):
         if r["admin_level"]:
             parts.append(f"[admin_level={r['admin_level']}]")
         parts.append(f"— dataset: {r['dataset']}")
+        if r.get("match_type") == "nearest":
+            parts.append(f"[nearest, ~{r.get('distance_m', '?')}m]")
         print("  ".join(parts))
 
 
@@ -104,8 +109,13 @@ def main():
         help="Bounding box as south,west,north,east (e.g. 37.7,-122.5,37.8,-122.4)",
     )
     p_fetch.add_argument(
+        "--area-id",
+        type=int,
+        help="Overpass area ID to fetch directly (bypasses city name disambiguation)",
+    )
+    p_fetch.add_argument(
         "--name",
-        help="Name for the dataset when using --bbox (default: bbox_region)",
+        help="Name for the dataset when using --bbox or --area-id",
     )
     p_fetch.set_defaults(func=cmd_fetch)
 

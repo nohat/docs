@@ -22,6 +22,21 @@ area["name"="{city}"]["boundary"="administrative"]->.city;
   relation["boundary"="administrative"]["admin_level"~"^(9|10|11)$"](area.city);
   relation["place"~"^(neighbourhood|quarter|suburb)$"](area.city);
   way["place"~"^(neighbourhood|quarter|suburb)$"](area.city);
+  node["place"~"^(neighbourhood|quarter|suburb)$"](area.city);
+);
+out body;
+>;
+out skel qt;
+"""
+
+QUERY_AREA_ID_TEMPLATE = """\
+[out:json][timeout:120];
+area({area_id})->.city;
+(
+  relation["boundary"="administrative"]["admin_level"~"^(9|10|11)$"](area.city);
+  relation["place"~"^(neighbourhood|quarter|suburb)$"](area.city);
+  way["place"~"^(neighbourhood|quarter|suburb)$"](area.city);
+  node["place"~"^(neighbourhood|quarter|suburb)$"](area.city);
 );
 out body;
 >;
@@ -35,6 +50,7 @@ QUERY_BBOX_TEMPLATE = """\
   relation["boundary"="administrative"]["admin_level"~"^(9|10|11)$"]({south},{west},{north},{east});
   relation["place"~"^(neighbourhood|quarter|suburb)$"]({south},{west},{north},{east});
   way["place"~"^(neighbourhood|quarter|suburb)$"]({south},{west},{north},{east});
+  node["place"~"^(neighbourhood|quarter|suburb)$"]({south},{west},{north},{east});
 );
 out body;
 >;
@@ -61,10 +77,27 @@ def _build_geometries(elements: list[dict]) -> list[dict]:
     ways = {}
     features = []
 
-    # Index nodes and ways
+    # Index nodes and ways; collect tagged neighborhood nodes
     for el in elements:
         if el["type"] == "node":
             nodes[el["id"]] = (el["lon"], el["lat"])
+            # Nodes with a place tag and name are neighborhood point markers
+            if "tags" in el and el["tags"].get("name") and el["tags"].get("place"):
+                tags = el["tags"]
+                features.append({
+                    "type": "Feature",
+                    "properties": {
+                        "name": tags["name"],
+                        "place": tags.get("place", ""),
+                        "admin_level": tags.get("admin_level", ""),
+                        "boundary": tags.get("boundary", ""),
+                        "source_type": "node",
+                    },
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [el["lon"], el["lat"]],
+                    },
+                })
         elif el["type"] == "way":
             ways[el["id"]] = el.get("nodes", [])
 
@@ -231,19 +264,65 @@ def _make_multi_feature(
     }
 
 
+def find_city_areas(city: str) -> list[dict]:
+    """Query Overpass for all administrative areas matching a city name.
+
+    Returns a list of dicts with area metadata (id, tags, etc.).
+    """
+    query = f"""\
+[out:json][timeout:30];
+area["name"="{city}"]["boundary"="administrative"];
+out tags;
+"""
+    data = _overpass_query(query)
+    return data.get("elements", [])
+
+
 def fetch_city(city: str) -> Path:
-    """Fetch neighborhood boundaries for a city and save as GeoJSON."""
+    """Fetch neighborhood boundaries for a city and save as GeoJSON.
+
+    If the city name matches multiple OSM areas, prints disambiguation
+    info and exits so the user can re-run with --area-id.
+    """
+    # Disambiguation: check how many areas match
+    areas = find_city_areas(city)
+    if len(areas) == 0:
+        print(f"Error: no OSM area found for '{city}'.", file=sys.stderr)
+        print("Try a different spelling, or use --bbox or --area-id.", file=sys.stderr)
+        sys.exit(1)
+    elif len(areas) > 1:
+        print(f"Multiple areas match '{city}':\n", file=sys.stderr)
+        for i, area in enumerate(areas, 1):
+            tags = area.get("tags", {})
+            aid = area["id"]
+            name = tags.get("name", "?")
+            admin = tags.get("admin_level", "?")
+            wikidata = tags.get("wikidata", "")
+            is_in = tags.get("is_in", tags.get("is_in:state", ""))
+            line = f"  {i}. area_id={aid}  name={name}  admin_level={admin}"
+            if wikidata:
+                line += f"  wikidata={wikidata}"
+            if is_in:
+                line += f"  is_in={is_in}"
+            print(line, file=sys.stderr)
+        print(
+            f"\nRe-run with:  neighborhood-lookup fetch --area-id <ID> --name <slug>",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Exactly one match — proceed
     query = QUERY_TEMPLATE.format(city=city)
     data = _overpass_query(query)
     elements = data.get("elements", [])
     print(f"Received {len(elements)} raw OSM elements", file=sys.stderr)
 
     features = _build_geometries(elements)
-    print(f"Built {len(features)} neighborhood polygons", file=sys.stderr)
+    print(f"Built {len(features)} neighborhood features", file=sys.stderr)
 
     if not features:
         print(
-            "Warning: no neighborhood polygons found. Try a different city "
+            "Warning: no neighborhood features found. Try a different city "
             "name or use --bbox instead.",
             file=sys.stderr,
         )
@@ -254,6 +333,38 @@ def fetch_city(city: str) -> Path:
     }
 
     slug = city.lower().replace(" ", "_").replace(",", "")
+    out_path = DATA_DIR / f"{slug}.geojson"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w") as f:
+        json.dump(geojson, f)
+
+    print(f"Saved {len(features)} neighborhoods to {out_path}", file=sys.stderr)
+    return out_path
+
+
+def fetch_area(area_id: int, name: str) -> Path:
+    """Fetch neighborhood boundaries using a specific Overpass area ID."""
+    query = QUERY_AREA_ID_TEMPLATE.format(area_id=area_id)
+    data = _overpass_query(query)
+    elements = data.get("elements", [])
+    print(f"Received {len(elements)} raw OSM elements", file=sys.stderr)
+
+    features = _build_geometries(elements)
+    print(f"Built {len(features)} neighborhood features", file=sys.stderr)
+
+    if not features:
+        print(
+            "Warning: no neighborhood features found for area_id "
+            f"{area_id}.",
+            file=sys.stderr,
+        )
+
+    geojson = {
+        "type": "FeatureCollection",
+        "features": features,
+    }
+
+    slug = name.lower().replace(" ", "_").replace(",", "")
     out_path = DATA_DIR / f"{slug}.geojson"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
