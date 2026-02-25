@@ -354,15 +354,23 @@ def fetch_city(city: str) -> Path:
         for i, area in enumerate(areas, 1):
             tags = area.get("tags", {})
             aid = area["id"]
-            name = tags.get("name", "?")
-            admin = tags.get("admin_level", "?")
-            wikidata = tags.get("wikidata", "")
-            is_in = tags.get("is_in", tags.get("is_in:state", ""))
-            line = f"  {i}. area_id={aid}  name={name}  admin_level={admin}"
-            if wikidata:
-                line += f"  wikidata={wikidata}"
-            if is_in:
-                line += f"  is_in={is_in}"
+            # Extract location from wikipedia tag (e.g. "en:Henderson, Kentucky")
+            location = ""
+            wp = tags.get("wikipedia", "")
+            if ", " in wp:
+                location = wp.split(", ", 1)[1]
+            if not location:
+                location = tags.get("is_in", tags.get("is_in:state", ""))
+            pop = tags.get("population", "")
+            border = tags.get("border_type", tags.get("place", ""))
+            line = f"  {i}. {tags.get('name', '?')}"
+            if location:
+                line += f", {location}"
+            if border:
+                line += f" ({border})"
+            if pop:
+                line += f"  pop. {pop}"
+            line += f"  [area_id={aid}]"
             print(line, file=sys.stderr)
         print(
             f"\nRe-run with:  neighborhood-lookup fetch --area-id <ID> --name <slug>",
