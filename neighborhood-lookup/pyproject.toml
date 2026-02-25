@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neighborhood-lookup"
+version = "0.1.0"
+description = "CLI tool to look up neighborhoods from lat/lon using OpenStreetMap boundary data"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.28",
+    "shapely>=2.0",
+]
+
+[project.scripts]
+neighborhood-lookup = "neighborhood_lookup.cli:main"
+
+[tool.setuptools.package-data]
+neighborhood_lookup = ["data/.gitkeep"]
