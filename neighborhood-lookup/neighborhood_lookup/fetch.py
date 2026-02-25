@@ -264,6 +264,65 @@ def _make_multi_feature(
     }
 
 
+def reverse_geocode(lat: float, lon: float) -> dict:
+    """Reverse geocode a lat/lon to find the containing city via Nominatim.
+
+    Returns a dict with keys: city_name, area_id, slug.
+    """
+    url = "https://nominatim.openstreetmap.org/reverse"
+    params = {"lat": lat, "lon": lon, "format": "jsonv2"}
+    headers = {"User-Agent": "neighborhood-lookup/1.0"}
+    resp = requests.get(url, params=params, headers=headers, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+
+    address = data.get("address", {})
+    city_name = (
+        address.get("city")
+        or address.get("town")
+        or address.get("village")
+        or address.get("municipality")
+    )
+    if not city_name:
+        print("Error: could not determine city from coordinates.", file=sys.stderr)
+        print(f"Nominatim address: {address}", file=sys.stderr)
+        sys.exit(1)
+
+    osm_type = data.get("osm_type", "")
+    osm_id = int(data.get("osm_id", 0))
+
+    # Walk up to the city-level result for the area ID
+    # The top-level result might be a building/road, so search addressparts
+    area_id = None
+    addr_url = "https://nominatim.openstreetmap.org/search"
+    addr_params = {"q": city_name, "format": "jsonv2", "limit": 1, "addressdetails": 1}
+    addr_resp = requests.get(addr_url, params=addr_params, headers=headers, timeout=30)
+    addr_resp.raise_for_status()
+    addr_results = addr_resp.json()
+    if addr_results:
+        r = addr_results[0]
+        r_type = r.get("osm_type", "")
+        r_id = int(r.get("osm_id", 0))
+        if r_type == "relation":
+            area_id = 3600000000 + r_id
+        elif r_type == "way":
+            area_id = 2400000000 + r_id
+        elif r_type == "node":
+            area_id = r_id
+
+    if area_id is None:
+        # Fallback: use the top-level reverse result
+        if osm_type == "relation":
+            area_id = 3600000000 + osm_id
+        elif osm_type == "way":
+            area_id = 2400000000 + osm_id
+        else:
+            area_id = osm_id
+
+    slug = city_name.lower().replace(" ", "_").replace(",", "")
+    return {"city_name": city_name, "area_id": area_id, "slug": slug}
+
+
 def find_city_areas(city: str) -> list[dict]:
     """Query Overpass for all administrative areas matching a city name.
 

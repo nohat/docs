@@ -36,19 +36,59 @@ def cmd_lookup(args):
     """Handle the 'lookup' subcommand."""
     from neighborhood_lookup.geo import lookup
 
-    results = lookup(args.lat, args.lon, dataset=args.dataset)
+    dataset = args.dataset
+    city_name = None
+
+    if not dataset:
+        from neighborhood_lookup.fetch import reverse_geocode, fetch_area
+
+        geo = reverse_geocode(args.lat, args.lon)
+        city_name = geo["city_name"]
+        slug = geo["slug"]
+        geojson_path = DATA_DIR / f"{slug}.geojson"
+        if not geojson_path.exists():
+            print(
+                f"Auto-fetching neighborhood data for {city_name}...",
+                file=sys.stderr,
+            )
+            fetch_area(geo["area_id"], slug)
+        dataset = slug
+
+    results = lookup(args.lat, args.lon, dataset=dataset)
 
     if args.json:
-        print(json.dumps(results, indent=2))
+        if not results and city_name:
+            print(json.dumps({"city": city_name, "neighborhoods": []}, indent=2))
+        else:
+            print(json.dumps(results, indent=2))
         return
 
     if not results:
-        print(f"No neighborhood found for ({args.lat}, {args.lon})")
-        datasets = list(DATA_DIR.glob("*.geojson"))
-        if not datasets:
-            print("No datasets downloaded yet. Run 'neighborhood-lookup fetch' first.", file=sys.stderr)
+        if city_name:
+            # We know the city from reverse geocoding — give a useful explanation
+            geojson_path = DATA_DIR / f"{dataset}.geojson"
+            n_features = 0
+            if geojson_path.exists():
+                with open(geojson_path) as f:
+                    n_features = len(json.load(f).get("features", []))
+            if n_features == 0:
+                print(f"Location is in {city_name}, but OpenStreetMap has no neighborhood boundary data for this city.")
+            else:
+                print(
+                    f"Location is in {city_name} ({n_features} neighborhoods loaded), "
+                    f"but this point doesn't fall inside any neighborhood polygon."
+                )
+                print(
+                    "This often means OSM's neighborhood boundaries don't fully cover the city.",
+                    file=sys.stderr,
+                )
         else:
-            print(f"Searched {len(datasets)} dataset(s): {', '.join(d.stem for d in datasets)}", file=sys.stderr)
+            print(f"No neighborhood found for ({args.lat}, {args.lon})")
+            datasets = list(DATA_DIR.glob("*.geojson"))
+            if not datasets:
+                print("No datasets downloaded yet. Run 'neighborhood-lookup fetch' first.", file=sys.stderr)
+            else:
+                print(f"Searched {len(datasets)} dataset(s): {', '.join(d.stem for d in datasets)}", file=sys.stderr)
         sys.exit(1)
 
     for r in results:
